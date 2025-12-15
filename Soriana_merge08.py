@@ -58,6 +58,18 @@ def apply_denominacion_normalization(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def invalid_fechacancel_mask(df: pd.DataFrame) -> pd.Series:
+    """
+    Marca filas con FECHACANCELACION vacia/nula o anterior a FECINI.
+    """
+    if "FECHACANCELACION" not in df.columns:
+        return pd.Series(False, index=df.index)
+    fecha_cancel = pd.to_datetime(df["FECHACANCELACION"], errors="coerce")
+    fecini = pd.to_datetime(df["FECINI"], errors="coerce") if "FECINI" in df.columns else pd.Series(False, index=df.index)
+    earlier_than_start = fecha_cancel < fecini if "FECINI" in df.columns else pd.Series(False, index=df.index)
+    return fecha_cancel.isna() | earlier_than_start
+
+
 def fetch_legado(conn: pyodbc.Connection, ids: list[str], batch_size: int = 500) -> pd.DataFrame:
     resultados = []
     tabla_legado = "dbo.Convenios_Legado_Soriana"
@@ -132,6 +144,47 @@ def fetch_kona(conn: pyodbc.Connection, faltantes: list[str]) -> pd.DataFrame:
     return df
 
 
+def fetch_kona_by_denominacion(conn: pyodbc.Connection, convenios: list[str], batch_size: int = 500) -> pd.DataFrame:
+    """
+    Consulta SAP KONA usando denominacion_externa como clave, con un LIKE para cubrir sufijos/prefijos.
+    """
+    convenios_limpios = [normalize_denominacion_externa(c) for c in convenios if pd.notna(c)]
+    convenios_limpios = [c for c in convenios_limpios if c]
+    if not convenios_limpios:
+        return pd.DataFrame()
+
+    resultados = []
+    tabla_kona = "dbo.Catalogo_Convenios_SAP_KONA"
+    cols_kona = [
+        "acuerdo",
+        "clase_acuerdo",
+        "descripción_del_acuerdo",
+        "no_proveedor",
+        "estatus",
+        "fecha_modificación_cancelación",
+        "denominación_externa"
+    ]
+    cols_kona_select = ", ".join(cols_kona)
+
+    for i in range(0, len(convenios_limpios), batch_size):
+        subset = convenios_limpios[i: i + batch_size]
+        placeholders = " OR ".join("denominación_externa LIKE ?" for _ in subset)
+        query_kona = f"""
+            SELECT {cols_kona_select}
+            FROM {tabla_kona}
+            WHERE {placeholders}
+        """
+        patterns = [f"%{c}%" for c in subset]
+        print(f"Batch SAP_KONA (denominacion) {i // batch_size + 1}")
+        df_tmp = pd.read_sql(query_kona, conn, params=patterns)
+        resultados.append(df_tmp)
+
+    df = pd.concat(resultados, ignore_index=True) if resultados else pd.DataFrame()
+    df = apply_denominacion_normalization(df)
+    print("Filas recuperadas desde SAP_KONA por denominacion:", len(df))
+    return df
+
+
 def merge_kona(df_sin_legado: pd.DataFrame, df_kona: pd.DataFrame) -> pd.DataFrame:
     df_sin_legado["Id_Num_Conv"] = df_sin_legado["Id_Num_Conv"].astype(str)
     df_kona["acuerdo"] = df_kona["acuerdo"].astype(str)
@@ -158,8 +211,12 @@ def main():
     df_sql_legado = fetch_legado(conn, values, batch_size=500)
     df_merged = merge_legado(df_excel, df_sql_legado)
 
+    invalid_cancel_mask = invalid_fechacancel_mask(df_merged) & df_merged["origen"].eq("Legado")
+    df_legado_valid = df_merged[df_merged["origen"].eq("Legado") & ~invalid_cancel_mask]
+    df_legado_invalid = df_merged[invalid_cancel_mask].copy()
     df_sin_legado = df_merged[df_merged["origen"].isna()].copy()
     print("Filas sin cruce en Legado:", df_sin_legado.shape[0])
+    print("Filas Legado con FECHACANCELACION invalida:", df_legado_invalid.shape[0])
 
     faltantes_conv = df_sin_legado["Id_Num_Conv"].dropna().unique().tolist()
     print("Registros para consultar en SAP_KONA:", len(faltantes_conv))
@@ -167,9 +224,31 @@ def main():
     df_sql_kona = fetch_kona(conn, faltantes_conv)
     df_kona_merge = merge_kona(df_sin_legado, df_sql_kona)
 
-    df_legado_final = df_merged[df_merged["origen"] == "Legado"]
+    df_kona_den_merge = pd.DataFrame()
+    if not df_legado_invalid.empty:
+        convenios_den = df_legado_invalid["Id_Num_Conv"].dropna().tolist()
+        df_sql_kona_den = fetch_kona_by_denominacion(conn, convenios_den)
+        if not df_sql_kona_den.empty:
+            df_sql_kona_den["den_norm"] = df_sql_kona_den["denominación_externa"].astype(str)
+            df_sql_kona_den["den_norm"] = df_sql_kona_den["den_norm"].apply(lambda x: normalize_denominacion_externa(x))
+
+            df_legado_invalid["conv_norm"] = df_legado_invalid["Id_Num_Conv"].apply(normalize_denominacion_externa)
+
+            df_kona_den_merge = df_legado_invalid.merge(
+                df_sql_kona_den,
+                left_on="conv_norm",
+                right_on="den_norm",
+                how="left",
+                suffixes=("", "_kona"),
+            )
+            df_kona_den_merge["origen"] = df_kona_den_merge["den_norm"].notna().map({True: "Sap Kona", False: None})
+            df_kona_den_merge.drop(columns=["conv_norm", "den_norm"], inplace=True)
+
+    df_legado_final = df_legado_valid
     df_kona_final = df_kona_merge[df_kona_merge["origen"] == "Sap Kona"]
-    df_total = pd.concat([df_legado_final, df_kona_final], ignore_index=True)
+    df_kona_den_final = df_kona_den_merge[df_kona_den_merge["origen"] == "Sap Kona"] if not df_kona_den_merge.empty else pd.DataFrame()
+
+    df_total = pd.concat([df_legado_final, df_kona_final, df_kona_den_final], ignore_index=True)
 
     print("FILAS TOTALES EN EL RESULTADO FINAL:", df_total.shape[0])
     df_total.head()
