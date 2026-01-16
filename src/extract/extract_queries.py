@@ -1,7 +1,5 @@
 from pathlib import Path
-
 import pandas as pd
-
 from src.config.db import get_db_connection
 from src.extract.repository import fetch_vendor_range, fetch_vendor
 
