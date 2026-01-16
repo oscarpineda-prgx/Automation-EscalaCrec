@@ -7,7 +7,7 @@ def get_db_connection() -> pyodbc.Connection:
     conn_str = (
         "DRIVER={ODBC Driver 18 for SQL Server};"
         "SERVER=ATL20AF2222SQ19;"
-        "DATABASE=SORIANA_MX_2024_PROD_F;"
+        "DATABASE=SORIANA_PROJECTS;"
         "Trusted_Connection=yes;"
     )
     return pyodbc.connect(conn_str)

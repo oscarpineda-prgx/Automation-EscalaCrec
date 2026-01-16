@@ -1,0 +1,3 @@
+SELECT *
+FROM SORIANA_PROJECTS.dbo.F_AP(?, ?, ?)
+ORDER BY InvDt;
