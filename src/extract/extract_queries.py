@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 from src.config.db import get_db_connection
-from src.extract.repository import fetch_vendor_range, fetch_vendor
+from src.extract.repository import fetch_vendor_range, fetch_vendor, fetch_query
 
 QUERY_SPECS = {
     "ap": ("ap.sql", "range"),
@@ -20,8 +20,27 @@ def get_data(vendor: str, fecha_ini: str, fecha_fin: str) -> dict[str, pd.DataFr
     out: dict[str, pd.DataFrame] = {}
 
     with get_db_connection() as conn:
+        # Primero obtenemos convenios_legados_s para usar su FOLIOCONVENIO en ap.sql
+        convenios_legados_s_df = fetch_vendor("convenios_legados_s.sql", vendor, conn=conn)
+        out["convenios_legados_s"] = convenios_legados_s_df
+
+        folio_series = convenios_legados_s_df.get("FOLIOCONVENIO")
+        folio_like = "%"
+        if folio_series is not None:
+            folio_series = folio_series.dropna().astype(str).str.strip()
+            if not folio_series.empty:
+                folio_value = folio_series.iloc[0]
+                # Si viene como numero con sufijo ".0", quitamos esa parte.
+                if folio_value.endswith(".0"):
+                    folio_value = folio_value[:-2]
+                folio_like = f"%{folio_value}%"
+
         for key, (sql_file, mode) in QUERY_SPECS.items():
-            if mode == "range":
+            if key == "convenios_legados_s":
+                continue  # ya obtenido arriba
+            if key == "ap":
+                out[key] = fetch_query(sql_file, [vendor, fecha_ini, fecha_fin, folio_like], conn=conn)
+            elif mode == "range":
                 out[key] = fetch_vendor_range(sql_file, vendor, fecha_ini, fecha_fin, conn=conn)
             else:
                 out[key] = fetch_vendor(sql_file, vendor, conn=conn)
