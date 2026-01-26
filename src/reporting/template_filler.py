@@ -130,6 +130,7 @@ def generate_escalacrec_report(
 
 
 def _first_nonempty(series: pd.Series) -> Optional[str]:
+    """Devuelve el primer valor no vacío de la serie (como texto), limpiando sufijos típicos de Excel."""
     if series is None:
         return None
     cleaned = series.dropna().astype(str).str.strip()
@@ -142,7 +143,12 @@ def _first_nonempty(series: pd.Series) -> Optional[str]:
 
 
 def _resolve_ap_key(conn, vendor: str) -> Optional[str]:
-    """Obtiene la llave para AP: FOLIOCONVENIO (legado S/C) o acuerdo (SAP)."""
+    """
+    Obtiene la llave de búsqueda para AP:
+    1) Prioriza FOLIOCONVENIO de convenios_legados_s.
+    2) Si no hay, usa convenios_legados_c.
+    3) Última opción: acuerdo desde convenios_sap.
+    """
     for sql_file in ("convenios_legados_s.sql", "convenios_legados_c.sql"):
         df = fetch_vendor(sql_file, vendor, conn=conn)
         if not df.empty and "FOLIOCONVENIO" in df.columns:
