@@ -99,3 +99,18 @@ print(out)
 - Validar esquema de `Porcentajes.xlsx` y del Excel de lote antes de procesar.
 - Añadir pruebas unitarias para cálculo de crecimiento y selección de rangos.
 - Externalizar configuración de rutas/DB a un YAML si se requieren ambientes múltiples.
+
+## Documentación adicional
+
+En `docs/`:
+
+- `Documentacion_Proyecto_Escala_Crecimiento.docx` / `.pdf` — documento del
+  proyecto completo.
+- `Documentacion EscCrec - Importe.docx` — el detalle del cálculo del importe.
+
+## Una advertencia al correr
+
+Los scripts de `src/merges/` referencian sus entradas como `input/...`, o sea
+**relativo a la carpeta desde donde se ejecuta**. Hay que correrlos parado en la
+raíz del proyecto (`python -m src.merges.merge_unificado`); desde otra carpeta no
+encuentran los Excel de entrada.
